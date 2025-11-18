@@ -1,0 +1,78 @@
+!pip install simpy
+import simpy
+import random
+import pandas as pd
+
+# --- CONFIGURACIÓN SIMPLE ---
+CANTIDAD_PRODUCTOS = 100
+INTERVALO_LLEGADA = 5  # Minutos entre pedidos
+TIEMPOS_PROCESO = [4, 6, 12, 5] # La estación 3 (12 min) debería ser el cuello de botella
+NOMBRES_ESTACIONES = ["Corte", "Ensamble", "Pintura", "Empaque"]
+
+# Variables para guardar datos
+datos_simulacion = []
+
+def proceso_industrial(env, nombre, estaciones):
+    # El producto pasa por las 4 estaciones en orden
+    for i, estacion_res in enumerate(estaciones):
+        llegada = env.now
+
+        # 1. Esperar turno (Cola)
+        with estacion_res.request() as turno:
+            yield turno
+
+            # 2. Calcular espera
+            espera = env.now - llegada
+
+            # 3. Trabajar (Proceso)
+            tiempo_real = random.gauss(TIEMPOS_PROCESO[i], 1.0)
+            if tiempo_real < 0.1: tiempo_real = 0.1
+            yield env.timeout(tiempo_real)
+
+            # 4. Guardar datos
+            datos_simulacion.append({
+                "Estacion": NOMBRES_ESTACIONES[i],
+                "Tiempo_Trabajando": tiempo_real,
+                "Tiempo_Esperando": espera
+            })
+
+def generador(env, estaciones):
+    for i in range(CANTIDAD_PRODUCTOS):
+        yield env.timeout(random.expovariate(1.0/INTERVALO_LLEGADA))
+        env.process(proceso_industrial(env, f"Prod-{i}", estaciones))
+
+# --- EJECUCIÓN ---
+print("⏳ Iniciando simulación...")
+
+env = simpy.Environment()
+# Crear las máquinas (recursos)
+recursos = [simpy.Resource(env, capacity=1) for _ in TIEMPOS_PROCESO]
+
+# Correr simulación
+env.process(generador(env, recursos))
+env.run()
+
+# --- CÁLCULOS (Pandas) ---
+print("✅ Simulación terminada. Calculando resultados...\n")
+
+df = pd.DataFrame(datos_simulacion)
+tiempo_total_sim = env.now
+
+# Agrupar datos para ver quién trabajó más
+resultados = df.groupby("Estacion")["Tiempo_Trabajando"].sum().reset_index()
+resultados["Utilizacion (%)"] = (resultados["Tiempo_Trabajando"] / tiempo_total_sim) * 100
+
+# Ordenar para encontrar el cuello de botella (el que tenga más %)
+resultados = resultados.sort_values(by="Utilizacion (%)", ascending=False)
+
+# --- RESULTADOS EN TEXTO ---
+print("-" * 40)
+print("RESULTADOS DEL ANÁLISIS TOC")
+print("-" * 40)
+print(resultados[["Estacion", "Utilizacion (%)"]].to_string(index=False))
+print("-" * 40)
+
+cuello = resultados.iloc[0]
+print(f"🚨 CUELLO DE BOTELLA DETECTADO: {cuello['Estacion']}")
+print(f"   Está ocupado el {cuello['Utilizacion (%)']:.1f}% del tiempo.")
+print("-" * 40)
